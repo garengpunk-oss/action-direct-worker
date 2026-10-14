@@ -1,50 +1,63 @@
+// Cloudflare Worker - DIRECT M3U8 RESOLVER
+// Deploy di: https://dash.cloudflare.com -> Workers
+// Hasil: https://vod-direct-action.yourname.workers.dev/?url=https://tv12.lk21official.cc/genre/action/page/1
+
 export default {
   async fetch(request) {
     const url = new URL(request.url);
-    const genre = url.searchParams.get("genre") || "action";
-    const page = url.searchParams.get("page") || "1";
+    const targetUrl = url.searchParams.get('url');
+    if (!targetUrl) return new Response('Missing?url=', {status: 400});
 
-    // GANTI INI DENGAN DOMAIN ASLI KAMU
-    const targetUrl = `https://tv12.lk21official.cc/${genre}?page=${page}`;
+    const WORKER_LAMA = 'https://berkatasaia.pages.dev/m3u?url=' + encodeURIComponent(targetUrl);
 
-    const res = await fetch(targetUrl, {
-      headers: { "User-Agent": "Mozilla/5.0" }
-    });
-    const html = await res.text();
+    // Step 1: Ambil M3U bungkus (gambar 1)
+    let res = await fetch(WORKER_LAMA);
+    let m3uBungkus = await res.text();
 
+    // Parse film
+    let lines = m3uBungkus.split('\n');
     let movies = [];
-
-    // --- CONTOH PARSER, SESUAIKAN DENGAN HTML SITUS KAMU ---
-    // Misal HTML kamu: <div class="movie"><img src="..."><h2>Judul (2023)</h2><span class="genre">Action</span><a data-m3u8="...">
-    const regex = /<div class="movie">.*?src="([^"]+)".*?<h2>(.*?) \((\d{4})\)<\/h2>.*?class="genre">(.*?)<\/span>.*?data-m3u8="([^"]+)"/gs;
-    let match;
-    while ((match = regex.exec(html))!== null) {
-      movies.push({
-        image: match[1],
-        title: match[2].trim(),
-        year: match[3],
-        genre: match[4].trim(),
-        m3u8: match[5]
-      });
+    let cur = null;
+    for (let ln of lines) {
+      ln = ln.trim();
+      if (ln.startsWith('#EXTINF')) {
+        let logo = (ln.match(/tvg-logo="([^"]+)"/)||[])[1]||'';
+        let title = ln.split(',').pop().trim();
+        cur = {title, logo, url: ''};
+      } else if (ln.startsWith('https://') && cur) {
+        cur.url = ln;
+        movies.push(cur);
+        cur = null;
+      }
     }
 
-    // Build M3U dengan logo & info
-    let m3u = "#EXTM3U\n";
-    for (const m of movies) {
-      m3u += `#EXTINF:-1 tvg-logo="${m.image}" group-title="${m.genre}" year="${m.year}",${m.title} (${m.year})\n`;
-      m3u += `${m.m3u8}\n`;
+    // Step 2: Resolve tiap film jadi m3u8 langsung (gambar 2) - parallel
+    async function getM3U8(movieUrl) {
+      try {
+        let r = await fetch(movieUrl);
+        let txt = await r.text();
+        let m = txt.match(/https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*/);
+        return m? m[0] : null;
+      } catch { return null; }
     }
 
-    if (movies.length === 0) {
-      m3u += `#EXTINF:-1,Parser kosong - cek selector HTML di example.com\n`;
-      m3u += `https://tv12.lk21official.cc/notfound.m3u8\n`;
-    }
+    let finalM3U = "#EXTM3U\n# DIRECT ACTION - " + new Date().toISOString() + "\n\n";
 
-    return new Response(m3u, {
+    // Fetch 10 film sekaligus biar cepat
+    let promises = movies.map(async (mov) => {
+      let m3u8 = await getM3U8(mov.url);
+      if (!m3u8) return null;
+      return `#EXTINF:-1 tvg-logo="${mov.logo}" group-title="Action",${mov.title}\n#EXTVLCOPT:http-user-agent=Mozilla/5.0\n#EXTVLCOPT:http-referer=https://turbovidhls.com/\n${m3u8}\n\n`;
+    });
+
+    let results = await Promise.all(promises);
+    results.forEach(r => { if(r) finalM3U += r; });
+
+    return new Response(finalM3U, {
       headers: {
-        "Content-Type": "application/x-mpegurl; charset=utf-8",
-        "Access-Control-Allow-Origin": "*",
-        "Cache-Control": "no-cache"
+        'Content-Type': 'application/x-mpegurl',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-cache'
       }
     });
   }
