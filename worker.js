@@ -1,29 +1,51 @@
 export default {
   async fetch(request) {
     const url = new URL(request.url);
-    const page = url.searchParams.get('page') || '1';
-    const targetUrl = `https://tv12.lk21official.cc/genre/action/page/${page}`;
-    const listUrl = `https://berkatasaia.pages.dev/m3u?url=${encodeURIComponent(targetUrl)}`;
-    let listRes = await fetch(listUrl);
-    let listText = await listRes.text();
-    let out = "#EXTM3U\n";
-    let lines = listText.split('\n');
-    for (let i = 0; i < lines.length; i++) {
-      let line = lines[i].trim();
-      if (line.startsWith('#EXTINF')) {
-        let extinf = line.replace(/group-title="[^"]*"/, 'group-title="Action"');
-        let movieWorkerUrl = (lines[i+1] || '').trim();
-        if (movieWorkerUrl.includes('m3u?movie=')) {
-          try {
-            let movieRes = await fetch(movieWorkerUrl);
-            let movieText = await movieRes.text();
-            let m = movieText.match(/https?:\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*/);
-            if (m) out += extinf + "\n#EXTVLCOPT:http-referer=https://turbovidhls.com/\n" + m[0] + "\n\n";
-          } catch(e) {}
-        }
-        i++;
-      }
+    const genre = url.searchParams.get("genre") || "action";
+    const page = url.searchParams.get("page") || "1";
+
+    // GANTI INI DENGAN DOMAIN ASLI KAMU
+    const targetUrl = `https://tv12.lk21official.cc/${genre}?page=${page}`;
+
+    const res = await fetch(targetUrl, {
+      headers: { "User-Agent": "Mozilla/5.0" }
+    });
+    const html = await res.text();
+
+    let movies = [];
+
+    // --- CONTOH PARSER, SESUAIKAN DENGAN HTML SITUS KAMU ---
+    // Misal HTML kamu: <div class="movie"><img src="..."><h2>Judul (2023)</h2><span class="genre">Action</span><a data-m3u8="...">
+    const regex = /<div class="movie">.*?src="([^"]+)".*?<h2>(.*?) \((\d{4})\)<\/h2>.*?class="genre">(.*?)<\/span>.*?data-m3u8="([^"]+)"/gs;
+    let match;
+    while ((match = regex.exec(html))!== null) {
+      movies.push({
+        image: match[1],
+        title: match[2].trim(),
+        year: match[3],
+        genre: match[4].trim(),
+        m3u8: match[5]
+      });
     }
-    return new Response(out, { headers: { 'Content-Type': 'application/x-mpegurl', 'Access-Control-Allow-Origin': '*' }});
+
+    // Build M3U dengan logo & info
+    let m3u = "#EXTM3U\n";
+    for (const m of movies) {
+      m3u += `#EXTINF:-1 tvg-logo="${m.image}" group-title="${m.genre}" year="${m.year}",${m.title} (${m.year})\n`;
+      m3u += `${m.m3u8}\n`;
+    }
+
+    if (movies.length === 0) {
+      m3u += `#EXTINF:-1,Parser kosong - cek selector HTML di example.com\n`;
+      m3u += `https://tv12.lk21official.cc/notfound.m3u8\n`;
+    }
+
+    return new Response(m3u, {
+      headers: {
+        "Content-Type": "application/x-mpegurl; charset=utf-8",
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "no-cache"
+      }
+    });
   }
 }
